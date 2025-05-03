@@ -1,0 +1,164 @@
+<!-- glsl-wrapper.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GLSL Render Preview</title>
+  <style>
+    html, body { margin: 0; overflow: hidden; height: 100%; background: black; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #perf {
+      position: absolute;
+      top: 8px;
+      left: 12px;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 12px;
+      background: rgba(0,0,0,0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      z-index: 100;
+    }
+    #graph {
+      display: block;
+      margin-top: 4px;
+      height: 30px;
+      width: 100px;
+    }
+  </style>
+</head>
+<body>
+<div id="perf" hidden>
+  <div id="ms">0.0ms</div>
+  <canvas id="graph" width="100" height="30"></canvas>
+</div>
+<canvas id="glcanvas"></canvas>
+
+<script id="vert-shader" type="x-shader/x-vertex">
+attribute vec4 a_position;
+void main() { gl_Position = a_position; }
+</script>
+
+<script>
+const canvas = document.getElementById('glcanvas');
+const gl = canvas.getContext('webgl');
+const perfBox = document.getElementById('perf');
+const msLabel = document.getElementById('ms');
+const graph = document.getElementById('graph');
+const graphCtx = graph.getContext('2d');
+
+let perfVisible = false;
+document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'f') {
+    perfVisible = !perfVisible;
+    perfBox.hidden = !perfVisible;
+  }
+});
+
+function createShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+    console.error(source);
+  }
+  return shader;
+}
+
+function wrapShader(shaderCode) {
+  return `
+precision mediump float;
+uniform vec2 iResolution;
+uniform float iTime;
+
+${shaderCode}
+
+void main() {
+  vec4 color;
+  render(color, gl_FragCoord.xy, iTime);
+  gl_FragColor = color;
+}
+`;
+}
+
+function init(shaderSource) {
+  const fragSource = wrapShader(shaderSource);
+  const vertSource = document.getElementById('vert-shader').text.trim();
+
+  const vertexShader = createShader(gl.VERTEX_SHADER, vertSource);
+  const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragSource);
+
+  const program = gl.createProgram();
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  gl.useProgram(program);
+
+  const positionBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1, 3, -1, -1, 3
+  ]), gl.STATIC_DRAW);
+
+  const posLoc = gl.getAttribLocation(program, 'a_position');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+  const uResolution = gl.getUniformLocation(program, 'iResolution');
+  const uTime = gl.getUniformLocation(program, 'iTime');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let start = performance.now();
+  const frameTimes = [];
+
+  function render(now) {
+    const time = (now - start) / 1000;
+
+    const t0 = performance.now();
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(uTime, time);
+    gl.uniform2f(uResolution, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.finish(); // Force GPU work to complete
+    const t1 = performance.now();
+
+    const frameTime = t1 - t0;
+    frameTimes.push(frameTime);
+    if (frameTimes.length > 100) frameTimes.shift();
+
+    if (perfVisible) {
+      msLabel.textContent = frameTime.toFixed(1) + 'ms';
+
+      // Draw performance graph
+      graphCtx.clearRect(0, 0, graph.width, graph.height);
+      graphCtx.beginPath();
+      graphCtx.moveTo(0, graph.height);
+      frameTimes.forEach((ft, i) => {
+        const y = graph.height - (ft / 33.3 * graph.height);
+        graphCtx.lineTo(i, y);
+      });
+      graphCtx.strokeStyle = '#0f0';
+      graphCtx.stroke();
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+}
+
+fetch('prism.glsl')
+  .then(res => res.text())
+  .then(src => init(src))
+  .catch(err => console.error('Failed to load prism.glsl', err));
+</script>
+</body>
+</html>
