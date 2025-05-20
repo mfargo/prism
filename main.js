@@ -3,9 +3,6 @@
 const canvas = document.getElementById('glcanvas');
 const gl = canvas.getContext('webgl');
 if (!gl.getExtension('OES_texture_float')) throw new Error('OES_texture_float unsupported');
-gl.getExtension('OES_texture_float_linear');
-gl.getExtension('EXT_color_buffer_float');
-gl.getExtension("WEBGL_color_buffer_float");
 
 let exrWidth = 1920, exrHeight = 960;
 
@@ -103,14 +100,10 @@ async function loadData(url) {
         lastpoint = shape.points[j];
       } else {
         counts[i] -= 2;
-        console.log("dupe")
       }
     }
   }
   const vertices = new Float32Array(verts);
-  console.log("Segs", counts.length, " - Verts", vertices.length)
-  console.log(counts)
-  console.log(vertices)
   return {counts: counts, verts: vertices};
 }
 function loadImageAsync(url) {

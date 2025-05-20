@@ -161,16 +161,14 @@ void render( out vec4 fragColor) {
 
         vec2 angularDir = normalize(screenPos - p);
 
-        // bool onLine = false;
-        // if (sdSegment(screenPos, a1, sample.xy) < 0.001) {
-        //     color += vec4(0.1, 0.6, 1.0, 1.0);
-        //     onLine = true;
-        // }
-        // if (sdSegment(screenPos, b1, sample.zw) < 0.001 ) {
-        //     color += onLine ? vec4(0.6, 1.0, 0.1, 1.0) : vec4(1.0, 0.1, 0.6, 1.0);
-        // }
-
-        if (isBetween(rd1, rd2, angularDir)) {
+        if (i == 1) {
+            if (sdSegment(screenPos, a1, sample.xy) < 0.001) {
+                 float tint = rand(uv);
+                 color = vec4(tint, tint, tint, 1.0);
+                 break;
+            }
+        }
+        else if (isBetween(rd1, rd2, angularDir)) {
         //      fragColor = vec4(1.0, 0.1, 0.6, 1.0);
         // //     // 同じ文字の中かチェック
             vec2 uvVector = screenPos - a1;
