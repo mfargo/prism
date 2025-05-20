@@ -1,4 +1,4 @@
-// shader.vert
+// preprocess.vert
 attribute vec2 a_position;
 
 void main() {

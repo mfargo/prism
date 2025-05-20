@@ -1,14 +1,13 @@
 // main.js
-import parseExr from 'parse-exr';
-import { intersect } from './ray.js'
 
 const canvas = document.getElementById('glcanvas');
 const gl = canvas.getContext('webgl');
 if (!gl.getExtension('OES_texture_float')) throw new Error('OES_texture_float unsupported');
 gl.getExtension('OES_texture_float_linear');
 gl.getExtension('EXT_color_buffer_float');
+gl.getExtension("WEBGL_color_buffer_float");
 
-let exrWidth = 1, exrHeight = 1;
+let exrWidth = 1920, exrHeight = 960;
 
 function resizeCanvas() {
   const vw = window.innerWidth;
@@ -38,6 +37,7 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 
 const mousePos = new Float32Array(4);
+const lastMousePos = new Float32Array(4);
 canvas.addEventListener('mousemove', function (e) {
   const rect = canvas.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
@@ -85,61 +85,45 @@ function createQuad(gl) {
   return buffer;
 }
 
-function halfToFloat(h) {
-  const s = (h & 0x8000) >> 15;
-  const e = (h & 0x7C00) >> 10;
-  const f = h & 0x03FF;
-
-  if (e === 0) return (s ? -1 : 1) * Math.pow(2, -14) * (f / Math.pow(2, 10));
-  if (e === 0x1F) return f ? NaN : ((s ? -1 : 1) * Infinity);
-
-  return (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + f / 1024);
-}
-
-// Load EXR texture
-async function loadExrTexture(gl, url) {
-  const res = await fetch(url);
-  const buffer = await res.arrayBuffer();
-  const exr = parseExr(buffer);
-
-  const { width, height, data } = exr;
-  exrWidth = width;
-  exrHeight = height;
-  resizeCanvas();
-  const rgba = new Float32Array(width * height * 4);
-  for (let i = 0; i < width * height; i++) {
-    rgba[i * 4 + 0] = halfToFloat(data[i * 4 + 0]);
-    rgba[i * 4 + 1] = halfToFloat(data[i * 4 + 1]);
-    rgba[i * 4 + 2] = halfToFloat(data[i * 4 + 2]);
-    rgba[i * 4 + 3] =  halfToFloat(data[i * 4 + 3]);
-  }
-
-
-
-
-  const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.FLOAT, rgba);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.bindTexture(gl.TEXTURE_2D, null);
-
-  return tex;
-}
-
 async function loadData(url) {
   const res = await fetch(url);
   const data = await res.json();
-  return data;
+
+  var verts = []
+  const counts = new Uint8Array(data.shapes.length);
+  for (let i = 0; i < data.shapes.length; i++) {
+    let shape = data.shapes[i];
+    counts[i] = shape.points.length;
+    // all pairs
+    var lastpoint = shape.points[shape.points.length - 1];
+    for (let j = 0; j<shape.points.length; j++) {
+      if (lastpoint[0] != shape.points[j][0] || lastpoint[1] != shape.points[j][1]) {
+        verts.push(shape.points[j][0]);
+        verts.push(exrHeight/1000.0 - shape.points[j][1]);
+        lastpoint = shape.points[j];
+      } else {
+        counts[i] -= 2;
+        console.log("dupe")
+      }
+    }
+  }
+  const vertices = new Float32Array(verts);
+  console.log("Segs", counts.length, " - Verts", vertices.length)
+  console.log(counts)
+  console.log(vertices)
+  return {counts: counts, verts: vertices};
+}
+function loadImageAsync(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.src = url;
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+  });
 }
 
-function normalize(v) {
-  const length = Math.hypot(v[0], v[1]);
-  return length > 0 ? [v[0] / length, v[1] / length] : [0, 0];
-}
+
+
 // Main
 (async () => {
   const [vsSrc, fsSrc] = await Promise.all([
@@ -148,42 +132,188 @@ function normalize(v) {
   ]);
   const program = createProgram(gl, vsSrc, fsSrc);
 
-  const tex = await loadExrTexture(gl, 'img/texture.exr');
   const logo = await loadData('./img/logo.json');
-  console.log(logo);
+
+  resizeCanvas();
+
+  const [evsSrc, efsSrc] = await Promise.all([
+    loadShaderSource('/preprocess.vert'),
+    loadShaderSource('/preprocess.glsl')
+  ]);
+  const expensiveProgram = createProgram(gl, evsSrc, efsSrc);
+
+
+  const labelImage = await loadImageAsync('img/labels.png');
+  const labelTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, labelTexture);
+  // Upload the image into the texture
+  gl.texImage2D(
+    gl.TEXTURE_2D,  // target
+    0,              // level
+    gl.RGBA,        // internal format
+    gl.RGBA,        // format
+    gl.UNSIGNED_BYTE, // type
+    labelImage       // image
+  );
+
+  // Set texture parameters
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+
+  const polyCountTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, polyCountTex);
+  gl.texImage2D(
+      gl.TEXTURE_2D,
+      0, gl.LUMINANCE, logo.counts.length, 1, 0,
+      gl.LUMINANCE, gl.UNSIGNED_BYTE,
+      logo.counts
+  );
+
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const vertTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, vertTex);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0, gl.LUMINANCE, logo.verts.length, 1, 0,
+    gl.LUMINANCE, gl.FLOAT,
+    logo.verts
+  );
+  // Required for float textures:
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+
+  const maxRefractions = 20;
+  // This will hold light path values
+  const lightPathTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, lightPathTexture);
+  gl.texImage2D(gl.TEXTURE_2D,
+      0,                 // mip level
+      gl.RGBA,          
+      maxRefractions, 1,       // width, height
+      0,                 // border
+      gl.RGBA,             // format
+      gl.FLOAT,          // type
+      null               // no initial data
+  );
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fbo = gl.createFramebuffer();
+
+
 
   const buffer = createQuad(gl);
   const aPos = gl.getAttribLocation(program, 'a_position');
+  const aPrepos = gl.getAttribLocation(expensiveProgram, 'a_position');
   const uRes = gl.getUniformLocation(program, 'iResolution');
-  const uTextureSize = gl.getUniformLocation(program, 'iTextureSize');
-  const uTime = gl.getUniformLocation(program, 'iTime');
-  const uTex = gl.getUniformLocation(program, 'iChannel0');
-  const uMouse = gl.getUniformLocation(program, "iMouse");
+  const uPreRes = gl.getUniformLocation(expensiveProgram, 'iResolution');
+  const uPreTargetRes = gl.getUniformLocation(expensiveProgram, 'iTargetResolution');
+  const uPrePolyCount = gl.getUniformLocation(expensiveProgram, 'iPolyCount');
+  const uPolyCount = gl.getUniformLocation(program, 'iPolyCount');
+  const uPointCount = gl.getUniformLocation(program, 'iPointCount');
+  const uPrePointCount = gl.getUniformLocation(expensiveProgram, 'iPointCount');
+  const uTime = gl.getUniformLocation(expensiveProgram, 'iTime');
+  const uPath = gl.getUniformLocation(program, 'iChannel0');
+  const uLabels = gl.getUniformLocation(program, "iChannel1");
+  const uPrePolys = gl.getUniformLocation(expensiveProgram, "iChannel0");
+  const uPolys = gl.getUniformLocation(program, "iChannel2");
+  const uPoints = gl.getUniformLocation(program, "iChannel3");
+  const uPrePoints = gl.getUniformLocation(expensiveProgram, "iChannel1");
+  const uMouse = gl.getUniformLocation(expensiveProgram, "iMouse");
 
-  gl.useProgram(program);
-  gl.enableVertexAttribArray(aPos);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  function runExpensiveShaderOnce(time) {
+    if (lastMousePos[0] == mousePos[0] && lastMousePos[1] == mousePos[1]) {
+      return;
+    }
+    lastMousePos[0] = mousePos[0];
+    lastMousePos[1] = mousePos[1];
+    
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, maxRefractions, 1);
+    // Use your expensive shader here
+    gl.useProgram(expensiveProgram);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lightPathTexture, 0);
+
+    gl.uniform1f(uTime, time);
+    gl.uniform2f(uPreTargetRes, maxRefractions, 1);
+    gl.uniform2f(uPreRes, canvas.width, canvas.height);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, polyCountTex);
+    gl.uniform1i(uPrePolys, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, vertTex);
+    gl.uniform1i(uPrePoints, 1);
+    
+    gl.uniform1i(uPrePolyCount, logo.counts.length);
+    gl.uniform1i(uPrePointCount, logo.verts.length);
+    gl.uniform4f(uMouse, mousePos[0], mousePos[1], 0.0, 0.0); // add click if needed
+    // Draw a 1x20 quad
+
+    gl.enableVertexAttribArray(aPrepos);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribPointer(aPrepos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  function runRenderShader(time) {
+    gl.useProgram(program);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+
+    gl.enableVertexAttribArray(aPos);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.useProgram(program);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1i(uPolyCount, logo.counts.length);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, lightPathTexture);
+    gl.uniform1i(uPath, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, labelTexture);
+    gl.uniform1i(uLabels, 1);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, polyCountTex);
+    gl.uniform1i(uPolys, 2);
+
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, vertTex);
+    gl.uniform1i(uPoints, 3);
+
+    gl.uniform1i(uPointCount, logo.verts.length);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
 
   const start = performance.now();
   function render() {
 
     const time = (performance.now() - start) / 1000;
 
-    const ro = [mousePos[0]/canvas.width, mousePos[1]/canvas.height];
-    const rd = normalize([0.5 - ro[0], 0.5 - ro[1]]);
-    intersect(ro, rd, logo);
+    runExpensiveShaderOnce(time);
 
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(program);
-    gl.uniform2f(uRes, canvas.width, canvas.height);
-    gl.uniform2f(uTextureSize, exrWidth, exrHeight);
-    gl.uniform1f(uTime, time);
-    gl.uniform4f(uMouse, mousePos[0], mousePos[1], 0.0, 0.0); // add click if needed
-    gl.uniform1i(uTex, 0);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    runRenderShader(time);
     requestAnimationFrame(render);
   }
   render();

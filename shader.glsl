@@ -1,27 +1,17 @@
 precision highp float;
-#define M_PI 3.1415926535897932384626433832795
 
 uniform vec2 iResolution;
-uniform vec2 iTextureSize;
-uniform float iTime;
-uniform sampler2D iChannel0;
-uniform vec4 iMouse;
+uniform int iPointCount;
+uniform int iPolyCount;
+uniform sampler2D iChannel0; // lightpath
+uniform sampler2D iChannel1; // labels
+uniform sampler2D iChannel2; // polys
+uniform sampler2D iChannel3; // points
 
 const float TMAX = 1e20;
-const float TMIN = 1e-10;
-//const float NORMAL_EP = 0.00001;
-const vec4 yellow = vec4(1.0, 1.0, 0.0, 1.0);
-const vec4 purple = vec4(1.0, 0.0, 1.0, 1.0);
-const int MAX_STEPS = 30;
+const int maxRefractions = 20;
+const vec2 dim = vec2(1.920, 0.96);
 
-struct Hit {
-    float d;
-    vec2 ro;
-    vec2 rd;
-    vec2 p;
-    vec2 n;
-    int mask;
-};
 
 
 float rand(vec2 n) { 
@@ -47,31 +37,24 @@ vec3 spectral_zucconi(float normalizedProgress) {
 	return bump3y (	cs * (x - xs), ys);
 }
 
-float intersectSegment(vec2 origin, vec2 dir, vec2 a, vec2 b) {
-    vec2 e = b - a;
-    vec2 p = vec2(-dir.y, dir.x); // perp to rayDir
+float attenuation(float d) {
+    return 1.0 / (d * d);
+}
 
-    float denom = dot(e, p);
-    if (abs(denom) < 1e-8) return -1.0; // Parallel
-
-    vec2 ao = origin - a;
-    float t = dot(ao, vec2(-e.y, e.x)) / denom;
-    float s = dot(ao, p) / denom;
-
-    if (t >= 0.0 && s >= 0.0 && s <= 1.0)
-        return t;
-
-    return -1.0;
+// https://iquilezles.org/articles/distfunctions2d/
+float sdSegment( in vec2 p, in vec2 a, in vec2 b ) {
+    vec2 pa = p-a, ba = b-a;
+    float h = clamp( dot(pa,ba)/dot(ba,ba), 0.0, 1.0 );
+    return length( pa - ba*h );
 }
 
 
-
-vec2 intersectLines(Hit a, Hit b) {
-    float determinate = a.rd.x * b.rd.y - a.rd.y * b.rd.x;
-    vec2 delta = b.ro - a.ro;
+vec2 intersectLines(vec2 p1, vec2 rd1, vec2 p2, vec2 rd2) {
+    float determinate = rd1.x * rd2.y - rd1.y * rd2.x;
+    vec2 delta = p2 - p1;
     if (abs(determinate) < 1e-8) return vec2(TMAX); // Lines are parallel
-    float t = (delta.x * b.rd.y - delta.y * b.rd.x) / determinate;
-    return a.ro + t * a.rd;
+    float t = (delta.x * rd2.y - delta.y * rd2.x) / determinate;
+    return p1 + t * rd1;
 }
 
 bool isBetween(vec2 vA, vec2 vB, vec2 vC) {
@@ -86,214 +69,136 @@ float angleBetween(vec2 from, vec2 to) {
     float crossVal = from.x * to.y - from.y * to.x;
     return atan(crossVal, dotVal);
 }
-
-float fresnel(vec2 rayDir, vec2 normal, float eta) {
-    float cosThetaI = clamp(dot(-rayDir, normal), 0.0, 1.0);
-    float sin2ThetaT = eta * eta * (1.0 - cosThetaI * cosThetaI);
-    if (sin2ThetaT > 1.0) {
-        return TMAX;
-    }
-    float r0 = pow((1.0 - eta) / (1.0 + eta), 2.0);
-    return r0 + (1.0 - r0) * pow(1.0 - cosThetaI, 5.0);
+int segmentCount(int polyID) {
+    float total = float(iPolyCount); 
+    float x = (0.5 + float(polyID))/total;
+    vec2 coord = vec2(x, 0.5);
+    return int(texture2D(iChannel2, coord).r * 255.0);
 }
 
-float distanceToLine(vec2 point, vec2 linePoint, vec2 lineDirNormalized) {
-    vec2 diff = point - linePoint;
-    vec2 perp = vec2(-lineDirNormalized.y, lineDirNormalized.x);
-    return abs(dot(diff, perp));
+vec2 point(int pointId) {
+    float total = float(iPointCount);
+    float x = (0.5 + float(pointId*2))/total;
+    vec2 coordx = vec2(x, 0.5);
+    float y = (0.5 + float(pointId*2 + 1))/total;
+    vec2 coordy = vec2(y, 0.5);
+    return vec2(texture2D(iChannel3, coordx).r, texture2D(iChannel3, coordy).r);
 }
 
-float attenuation(float d) {
-    return 0.1 / (d * d);
-}
-
-float map(vec2 p) {
-    return texture2D(iChannel0, p).b;
-}
-
-
-// I think I need to use inside parameter after all
-Hit pathtrace(vec2 ro, vec2 rd, vec2 texelSize) {
-    Hit hit;
-    hit.d = length(texelSize);
-    hit.ro = ro;
-    hit.rd = rd;
-    vec4 maskSample = texture2D(iChannel0, hit.ro + hit.rd * hit.d);
-    hit.mask = int(maskSample.a);
-
-    float d = TMAX;
-    for (int i = 0; i < MAX_STEPS; ++i) {
-        vec2 p = ro + rd * hit.d;
-        d = abs(map(p));
-        if (d < 0.0001) break;
-        hit.d += d;
-        if (hit.d > 2.0) break; // max distance of 2 for now;
-    }
-    hit.p = ro + rd * hit.d;
-
-    // using central differences;
-    float dx = map(hit.p + vec2(texelSize.x, 0)) - 
-                map(hit.p - vec2(texelSize.x, 0));
-    float dy = map(hit.p + vec2(0, texelSize.y)) - 
-                map(hit.p - vec2(0, texelSize.y));
-    vec2 grad = vec2(dx, dy) * 0.5;
-    hit.n = normalize(grad);
-
-
-    // vec2 grad = vec2(0.0);
-    // float w = 1.0 / 9.0;
-    // for (int x = -1; x <= 1; ++x) {
-    //     for (int y = -1; y <= 1; ++y) {
-    //         vec2 offset = vec2(x, y) * texelSize;
-    //         grad += texture2D(iChannel0, hit.p + offset).rg * w;
-    //     }
+vec4 debugColor(vec2 uv) {
+    const float thresh = 0.002;
+    int vid = 0;
+    // int pp = segmentCount(1);
+    // if (pp == 18) {
+    //     return vec4(1.0,0.0,1.0,1.0);
     // }
-    // hit.n = normalize(grad);
+    for (int shapeId = 0; shapeId < 100; shapeId++) {
+        if (shapeId >= iPolyCount) {
+            break;
+        }
+        int count = segmentCount(shapeId);
+        vec2 firstPoint = point(vid);
+        vec2 lastPoint = firstPoint;
+        
 
-    //vec4 normalSample =  texture2D(iChannel0, hit.p);
-    //hit.n = normalize(normalSample.rg);
-
-    return hit;
+        for (int i = 0; i < 100; i++) {
+            vec2 p;
+            if (i >= count) {
+                p = firstPoint;
+            } else {
+                p = point(vid + i);
+            }
+            float d = sdSegment(uv, lastPoint, p);
+            if (d < thresh) {
+                float amt = smoothstep(0.0, 1.0, 1.0 - d/thresh);
+                return vec4(amt, amt, amt, 1.0);
+            }
+            if (i >= count) {
+                break;
+            }
+            lastPoint = p;
+        }
+        vid += count;
+    }
+    return vec4(0);
 }
 
-vec2 pointOnRectEdge(float angle, vec2 rectSize) {
-    // Direction from angle
-    vec2 dir = vec2(cos(angle), sin(angle));
-    vec2 halfSize = rectSize * 0.5;
-
-    // Scale direction to reach edge of rectangle
-    vec2 scale = halfSize / abs(dir);
-    float t = min(scale.x, scale.y);
-
-    return dir * t; // relative to center
+float labelAt(vec2 screenPos) {
+    vec2 uv = screenPos / dim;
+    return texture2D(iChannel1, vec2(uv.x, 1.0 - uv.y)).r;
 }
 
 void render( out vec4 fragColor) {
-
     vec2 uv = gl_FragCoord.xy / iResolution.xy;
-    vec2 mouseNorm = iMouse.xy / iResolution.xy;
-    vec2 mouseCentered = mouseNorm - vec2(0.5);
-    float mouseAngle = atan(mouseCentered.y, mouseCentered.x);
-    vec2 lightPosition = pointOnRectEdge(mouseAngle, vec2(1, 1)) + vec2(0.5);
+    //fragColor = texture2D(iChannel0, uv); // test refractions
+    //return;
+    //fragColor = debugColor(uv * dim);
+    // //fragColor = texture2D(iChannel2, uv);
+    float u = float(0.5)/float(maxRefractions); 
+    vec4 sample = texture2D(iChannel0, vec2(u, 0.5));
+    vec2 a1 = sample.xy;
+    vec2 b1 = sample.zw;
+
+    vec2 screenPos = uv * dim;
     
-    vec2 texelSize = vec2(1.0)/iResolution.xy;
-    vec4 uvSample = texture2D(iChannel0, uv);
-    int uvMask = int(uvSample.a);
+    float label = labelAt(screenPos);
+    vec4 color = debugColor(screenPos);//texture2D(iChannel1, vec2(uv.x, 1.0 - uv.y))/5.0;
 
-    float lightAngle = -mouseAngle;
-    vec2 lightDirection = normalize(mouseNorm - lightPosition);
-    
-    float iorMin = 1.0/1.4;
-    float iorMax = 1.0/1.65;
-    float lineThickness = 0.001;
+    float totalDistance = 0.0;
+    for (int i = 1; i<maxRefractions; i++) {
+        u = (float(i) + 0.5)/float(maxRefractions); 
+        sample = texture2D(iChannel0, vec2(u, 0.5));
 
-
-    float d = uvSample.b;
-
-
-    Hit hit1 = pathtrace(lightPosition, lightDirection, texelSize);
-    vec3 c = vec3(0);//vec3(d);
-
-    
-    // don't need to run this on every pixel but for now:    
-    // draw a thin beam, representing the path of the light to the first hit 
-    if (length(uv - lightPosition) < hit1.d
-        && distanceToLine(uv, hit1.ro, hit1.rd) < 0.001) {
-        c = vec3(rand(uv));
-        fragColor = vec4(c, 1.0);
-        return;
-    }
-
-    float etaMin = (hit1.mask == 0) ? iorMin : 1.0/iorMin;
-    float etaMax = (hit1.mask == 0) ? iorMax : 1.0/iorMax;
-
-    hit1.rd = refract(hit1.rd, hit1.n, etaMin);
-    Hit hit2 = hit1;
-    hit2.rd = refract(hit2.rd, hit2.n, etaMax);
-    
-    
-
-    float totalDistance = hit1.d;
-
-    if (hit1.d > 100.0) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
-
-    bool uvInside = d < 0.0;
-    // add a little color to inner edges of objects;
-    if (uvInside) {
-        c = vec3(pow(max(0.0, d + 0.02) * 40.0, 4.0));
-    }
-
-    for (int i=0; i<20; i++) {                    
-
-        hit1 = pathtrace(hit1.p, hit1.rd, texelSize);
-        hit2 = pathtrace(hit2.p, hit2.rd, texelSize);
-        vec2 p = intersectLines(hit1, hit2);
-        
-        vec2 angularDir = normalize(uv - p);
-
-        if (isBetween(hit1.rd, hit2.rd, angularDir)) {
-            // 同じ文字の中かチェック
-            vec2 uvVector = uv - hit1.ro;
-            float uvDistance = length(uvVector);
-            if (uvMask == hit1.mask) {
-                // in the same object
-
-                bool valid = true;
-                if (uvMask == 0) {
-                    vec2 angularOrigin = (hit1.ro + hit2.ro)/2.0 + angularDir * 0.01;
-                    Hit directHit = pathtrace(angularOrigin, angularDir, texelSize);
-                    if (directHit.d < uvDistance) {
-                        valid = false;
-                    }
-                }
-
-                if (valid) {
-
-                    float totalAngle = abs(angleBetween(hit1.rd, hit2.rd));
-                    float progress = abs(angleBetween(angularDir, hit2.rd));
-                    float normalizedProgress = progress/totalAngle;
-                    float np = normalizedProgress * normalizedProgress * normalizedProgress;
-                    vec3 spect = spectral_zucconi(np);
-                    c += spect * attenuation(totalDistance + uvDistance);
-                }                
-            }
-        }
-
-        // これ、起きていない
-        if (hit1.d == TMAX && hit2.d == TMAX) {
+        if (sample.x < -10.0) {
             break;
         }
 
-        float f0 = fresnel(mix(hit1.rd, hit2.rd, 0.5), mix(hit1.n, hit2.n, 0.5), mix(iorMin, iorMax, 0.5));
-        
-        if (f0 > 1.0) {
-            hit1.rd = reflect(hit1.rd, hit1.n);
-            hit2.rd = reflect(hit2.rd, hit2.n);
-        } else {
-            etaMin = (hit1.mask == 0) ? iorMin : 1.0/iorMin;
-            etaMax = (hit2.mask == 0) ? iorMax : 1.0/iorMax;
-            vec2 nd1 = refract(hit1.rd, hit1.n, etaMin);
-            vec2 nd2 = refract(hit2.rd, hit2.n, etaMax);
+        totalDistance += length(sample.xy - a1);
 
-            if (length(nd1) < 1.0 || length(nd2) < 0.0) {
-                hit1.rd = reflect(hit1.rd, hit1.n);
-                hit2.rd = reflect(hit2.rd, hit2.n);
+        vec2 rd1 = normalize(sample.xy - a1);
+        vec2 rd2 = normalize(sample.zw - b1);
+        vec2 p = intersectLines(a1, rd1, b1, rd2);
 
-            } else {
-                hit1.rd = nd1;
-                hit2.rd = nd2;
-            }
-        }
+        vec2 angularDir = normalize(screenPos - p);
 
+        // bool onLine = false;
+        // if (sdSegment(screenPos, a1, sample.xy) < 0.001) {
+        //     color += vec4(0.1, 0.6, 1.0, 1.0);
+        //     onLine = true;
+        // }
+        // if (sdSegment(screenPos, b1, sample.zw) < 0.001 ) {
+        //     color += onLine ? vec4(0.6, 1.0, 0.1, 1.0) : vec4(1.0, 0.1, 0.6, 1.0);
+        // }
 
-        totalDistance += (hit1.d + hit2.d)/2.0;
+        if (isBetween(rd1, rd2, angularDir)) {
+        //      fragColor = vec4(1.0, 0.1, 0.6, 1.0);
+        // //     // 同じ文字の中かチェック
+            vec2 uvVector = screenPos - a1;
+            float uvDistance = length(uvVector);
+            float hitLabelA = labelAt((a1 + sample.xy)/2.0);
+            if (label == hitLabelA) {
+        //         // in the same object
+
+             
+                    float totalAngle = abs(angleBetween(rd1, rd2));
+                    float progress = abs(angleBetween(angularDir, rd2));
+                    float normalizedProgress = progress/totalAngle;
+                    float np = normalizedProgress * normalizedProgress * normalizedProgress;
+                    vec3 spect = spectral_zucconi(np);
+                    vec3 attenuatedColor = spect * attenuation(totalDistance + uvDistance);
+                    color += vec4(attenuatedColor, 1.0);
+            }            
+       }
+       a1 = sample.xy;
+       b1 = sample.zw;
 
     }
-  
-    fragColor = vec4(c, 1.0);
+
+
+
+
+    fragColor = color;
+
 }
 
 void main() {
