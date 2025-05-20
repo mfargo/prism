@@ -120,8 +120,8 @@ function loadImageAsync(url) {
 // Main
 (async () => {
   const [vsSrc, fsSrc] = await Promise.all([
-    loadShaderSource('/shader.vert'),
-    loadShaderSource('/shader.glsl')
+    loadShaderSource('shader.vert'),
+    loadShaderSource('shader.glsl')
   ]);
   const program = createProgram(gl, vsSrc, fsSrc);
 
@@ -130,8 +130,8 @@ function loadImageAsync(url) {
   resizeCanvas();
 
   const [evsSrc, efsSrc] = await Promise.all([
-    loadShaderSource('/preprocess.vert'),
-    loadShaderSource('/preprocess.glsl')
+    loadShaderSource('preprocess.vert'),
+    loadShaderSource('preprocess.glsl')
   ]);
   const expensiveProgram = createProgram(gl, evsSrc, efsSrc);
 
