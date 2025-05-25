@@ -133,7 +133,7 @@ function loadImageAsync(url) {
   const expensiveProgram = createProgram(gl, evsSrc, efsSrc);
 
 
-  const labelImage = await loadImageAsync('img/labels.png');
+  const labelImage = await loadImageAsync(`img/labels.png?t=${Date.now()}`);
   const labelTexture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, labelTexture);
   // Upload the image into the texture
