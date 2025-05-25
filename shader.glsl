@@ -10,8 +10,10 @@ uniform sampler2D iChannel3; // points
 
 const float TMAX = 1e20;
 const int maxRefractions = 20;
-const vec2 dim = vec2(1.920, 0.96);
+const vec2 dim = vec2(1.920, 1.390);
 
+const vec3 circleA = vec3(1.046 + 0.015, 1.390 - 0.590 - 0.015, 0.015);
+const vec3 circleB = vec3(1.046 + 0.015, 1.390 - 0.590 - 0.015, 0.0435);
 
 
 float rand(vec2 n) { 
@@ -47,7 +49,9 @@ float sdSegment( in vec2 p, in vec2 a, in vec2 b ) {
     float h = clamp( dot(pa,ba)/dot(ba,ba), 0.0, 1.0 );
     return length( pa - ba*h );
 }
-
+float sdCircle(vec2 p, vec3 circle) {
+    return length(p - circle.xy) - circle.z;
+}
 
 vec2 intersectLines(vec2 p1, vec2 rd1, vec2 p2, vec2 rd2) {
     float determinate = rd1.x * rd2.y - rd1.y * rd2.x;
@@ -92,7 +96,7 @@ vec4 debugColor(vec2 uv) {
     // if (pp == 18) {
     //     return vec4(1.0,0.0,1.0,1.0);
     // }
-    for (int shapeId = 0; shapeId < 100; shapeId++) {
+    for (int shapeId = 0; shapeId < 200; shapeId++) {
         if (shapeId >= iPolyCount) {
             break;
         }
@@ -120,6 +124,13 @@ vec4 debugColor(vec2 uv) {
         }
         vid += count;
     }
+
+    float d = min(abs(sdCircle(uv, circleA)), abs(sdCircle(uv, circleB)));
+    if (d < thresh) {
+        float amt = smoothstep(0.0, 1.0, 1.0 - d/thresh);
+        return vec4(amt, amt, amt, 1.0);
+    }
+
     return vec4(0);
 }
 
@@ -142,7 +153,7 @@ void render( out vec4 fragColor) {
     vec2 screenPos = uv * dim;
     
     float label = labelAt(screenPos);
-    vec4 color = debugColor(screenPos);//texture2D(iChannel1, vec2(uv.x, 1.0 - uv.y))/5.0;
+    vec4 color = vec4(0.0);//debugColor(screenPos);//texture2D(iChannel1, vec2(uv.x, 1.0 - uv.y))/5.0;
 
     float totalDistance = 0.0;
     for (int i = 1; i<maxRefractions; i++) {
@@ -193,7 +204,7 @@ void render( out vec4 fragColor) {
     }
 
 
-
+    color.w = max(max(color.r, color.g), color.b);
 
     fragColor = color;
 

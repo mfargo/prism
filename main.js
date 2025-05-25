@@ -4,13 +4,13 @@ const canvas = document.getElementById('glcanvas');
 const gl = canvas.getContext('webgl');
 if (!gl.getExtension('OES_texture_float')) throw new Error('OES_texture_float unsupported');
 
-let exrWidth = 1920, exrHeight = 960;
+let baseWidth = 1920, baseHeight = 1390;
 
 function resizeCanvas() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const windowAspect = vw / vh;
-  const imageAspect = exrWidth / exrHeight;
+  const imageAspect = baseWidth / baseHeight;
 
   let drawWidth, drawHeight;
   if (windowAspect > imageAspect) {
@@ -94,13 +94,10 @@ async function loadData(url) {
     // all pairs
     var lastpoint = shape.points[shape.points.length - 1];
     for (let j = 0; j<shape.points.length; j++) {
-      if (lastpoint[0] != shape.points[j][0] || lastpoint[1] != shape.points[j][1]) {
         verts.push(shape.points[j][0]);
-        verts.push(exrHeight/1000.0 - shape.points[j][1]);
+        verts.push(baseHeight/1000.0 - shape.points[j][1]);
         lastpoint = shape.points[j];
-      } else {
-        counts[i] -= 2;
-      }
+
     }
   }
   const vertices = new Float32Array(verts);
@@ -125,7 +122,7 @@ function loadImageAsync(url) {
   ]);
   const program = createProgram(gl, vsSrc, fsSrc);
 
-  const logo = await loadData('./img/logo.json');
+  const logo = await loadData('img/logo.json');
 
   resizeCanvas();
 

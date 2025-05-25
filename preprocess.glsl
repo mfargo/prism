@@ -13,10 +13,13 @@ uniform vec4 iMouse;
 
 const float TMAX = 1e20;
 const float TMIN = 1e-10;
-const vec2 dim = vec2(1.920, 0.96);
+const vec2 dim = vec2(1.920, 1.390);
 //const float NORMAL_EP = 0.00001;
 const vec4 yellow = vec4(1.0, 1.0, 0.0, 1.0);
 const vec4 purple = vec4(1.0, 0.0, 1.0, 1.0);
+
+const vec3 circleA = vec3(1.046 + 0.015, 1.39 - 0.590 - 0.015, 0.015);
+const vec3 circleB = vec3(1.046 + 0.015, 1.39 - 0.590 - 0.015, 0.0435);
 
 struct Hit {
     float d;
@@ -56,6 +59,26 @@ float intersectSegment(vec2 rayOrigin, vec2 rayDir, vec2 p1, vec2 p2) {
     float t2 = dot(v1, v3) / denom;
     if (t1 >= 0.0 && t2 >= 0.0 && t2 <= 1.0) return t1;
     return TMAX;
+}
+
+float intersectCircle(vec2 rayOrigin, vec2 rayDir, vec2 circleCenter, float radius) {
+    vec2 oc = circleCenter - rayOrigin;
+
+    float t_ca = dot(oc, rayDir);
+    float d2 = dot(oc, oc) - t_ca * t_ca;
+    float r2 = radius * radius;
+
+    if (d2 > r2) {
+        return -1.0; // No intersection
+    }
+
+    float thc = sqrt(r2 - d2);
+    float t0 = t_ca - thc;
+    float t1 = t_ca + thc;
+
+    if (t0 >= 0.0) return t0;
+    if (t1 >= 0.0) return t1;
+    return -1.0;
 }
 
 float intersectRect(vec2 rayOrigin, vec2 rayDir) {
@@ -106,7 +129,8 @@ Hit scene(vec2 ro, vec2 rd) {
     int vid = 0;
     vec4 closestSeg;
 
-    for (int shapeId = 0; shapeId < 100; shapeId++) {
+
+    for (int shapeId = 0; shapeId < 200; shapeId++) {
         if (shapeId >= iPolyCount) {
             break;
         }
@@ -135,6 +159,20 @@ Hit scene(vec2 ro, vec2 rd) {
         }
         vid += count;
     }
+    // float d = intersectCircle(ro, rd, circleB.xy, circleB.z);
+    // if (d < hit.d) {
+    //     hit.d = d;
+    //     hit.mask = iPolyCount;
+    //     d = intersectCircle(ro, rd, circleA.xy, circleA.z);
+    //     if (d < hit.d) {
+    //         hit.d = d;
+    //         hit.mask = 0;
+    //     }
+    //     hit.p = ro + hit.d * rd;
+    //     hit.n = normalize(hit.p - circleA.xy);
+    //     return hit;
+    // }
+
     if (hit.d >= TMAX) {
         return hit;
     }
